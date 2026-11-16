@@ -2,10 +2,29 @@
 
 The package also provides a persistent correction ledger (see
 :mod:`raster_objects.ledger`) with a command line at
-:mod:`raster_objects.ledger_cli`, and an activity-aware multi-source tile
+:mod:`raster_objects.ledger_cli`, an activity-aware multi-source tile
 mosaic warehouse (see :mod:`raster_objects.mosaic`) with a command line at
-:mod:`raster_objects.mosaic_cli`.
+:mod:`raster_objects.mosaic_cli`, and a persistent blind double-annotation
+collection pipeline (see :mod:`raster_objects.collection`) with a command
+line at :mod:`raster_objects.collection_cli`.
 """
+from .collection import (
+    Collection,
+    CollectionBusy,
+    CollectionError,
+    LeaseConflict,
+    LeaseExpired,
+    StaleClock,
+    UnknownLease,
+    WorkerDisqualified,
+    collection_status,
+    claim_work,
+    export_dataset,
+    init_collection,
+    submit_answer,
+    validate_answer,
+    validate_campaign,
+)
 from .ledger import (
     Ledger,
     LedgerBusy,
@@ -33,25 +52,40 @@ from .mosaic import (
 )
 
 __all__ = [
+    'Collection',
+    'CollectionBusy',
+    'CollectionError',
     'Ledger',
     'LedgerBusy',
     'LedgerError',
+    'LeaseConflict',
+    'LeaseExpired',
     'Mosaic',
     'MosaicBusy',
     'MosaicError',
     'RequestConflict',
     'RequestIdConflict',
+    'StaleClock',
     'TileConflict',
+    'UnknownLease',
     'UnknownTile',
     'UnknownVersion',
+    'WorkerDisqualified',
     'analyze',
     'apply_request',
+    'claim_work',
+    'collection_status',
+    'export_dataset',
     'export_version',
+    'init_collection',
     'init_ledger',
     'init_mosaic',
     'match_objects',
     'normalize_request',
     'put_tile',
+    'submit_answer',
+    'validate_answer',
+    'validate_campaign',
     'window_query',
     'withdraw_tile',
 ]

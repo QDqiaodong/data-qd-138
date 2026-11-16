@@ -93,6 +93,45 @@ PYTHONPATH=src python -m raster_objects.mosaic_cli window   --db run/mosaic.db \
 window` 及模块级 `init_mosaic/put_tile/withdraw_tile/window_query`）；测试中的
 `tests/mosaic_oracle.py` 是与生产存储和几何实现无关的逐格 oracle。
 
+## 盲复标采集管道
+
+需要把初始栅格分发给互不知晓答案的复标员、每人收齐两份独立原始标注，并在抽检发现
+不合格人员时自动补采时，使用仅依赖标准库与 SQLite 的持久化采集管道（设计、持久表示、
+失格事务与读写代价见 [采集管道契约](docs/collection.md)）。它交付带人员来源的双份
+原始标注，不计算多数票、不拼接空间窗口、不维护目标身份，哨兵真值不进入交付数据集。
+
+```sh
+PYTHONPATH=src python -m raster_objects.collection_cli init   --db run/collect.db --source run/campaign.json
+PYTHONPATH=src python -m raster_objects.collection_cli claim  --db run/collect.db --worker alice --now 100
+PYTHONPATH=src python -m raster_objects.collection_cli submit --db run/collect.db --worker alice \
+    --lease TOKEN --now 105 --source run/answer.json
+PYTHONPATH=src python -m raster_objects.collection_cli status --db run/collect.db
+PYTHONPATH=src python -m raster_objects.collection_cli export --db run/collect.db --output run/dataset.json
+```
+
+- `init` 只创建不存在的库；CAMPAIGN 严格为 `{lease_seconds,items,sentinels}`，普通
+  样本 1..2000、哨兵 1..100、租约 1..3600 秒，标识符沿用 ident 且两组 item_id 跨组
+  唯一；所有 grid/truth 复用单栅格 0/1/null、尺寸与连通性校验，truth 同形且至少一格
+  非 null，输入矩阵合计不超过 100 万格；入库后源文件删改不影响任务。
+- 人员首次 claim 自动登记；每人同时至多一个未到期租约，重复 claim 原租约原封返回、
+  不续期。新人先过一个哨兵，此后每成功提交两份普通标注再欠一次哨兵；欠债且哨兵耗尽
+  返回 `no_work/gold_exhausted`，不能绕过债务领取普通样本。同类按 item_id 字符串序
+  派首个可领项；普通样本恰需两名不同合格人员，有效票加未到期租约不得超过 2，过期名额
+  自动重派且旧 TOKEN 无法污染新名额。工作响应只有 `{token,deadline,connectivity,grid}`。
+- 哨兵 null 真值格不评分，其余格逐格完全相等（答案 null 也算不等）；任一失败即永久
+  失格，该人员既有普通票在同一事务内立即失效、已齐样本回落待补采并向他人开放，原标注
+  留作审计。同 TOKEN 规范化重试恒返首次回执（过期、时钟前进、失格后也不复活票），
+  异答案拒绝；逻辑时钟随成功调用单调推进，非法/冲突/过期/忙错误零副作用。
+- `status` 在单读取快照内给出每个普通样本的有效人员、完成/待补采态及每人合格状态、
+  普通计数与抽检债务；`export` 只含恰有两份有效标注的样本（按 item_id 排序），每项
+  保留初始样本与按 worker 排序的两份原始答案及各自完整 `analyze` 结果，绝不合成栅格。
+  协议错退出 2、忙错误退出 4，输出不得覆盖数据库或其 SQLite 辅助文件。
+
+可测试的 Python API 位于 `raster_objects.collection`（`Collection.initialize/claim/
+submit/status/export`、`validate_campaign/validate_answer` 及模块级
+`init_collection/claim_work/submit_answer/collection_status/export_dataset`），
+支持 `precommit_hook` 故障注入与 `observer` SQL 可观测读取证据。
+
 
 ## 当前业务与样例
 # Binary raster objects v1
