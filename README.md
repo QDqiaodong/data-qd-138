@@ -132,6 +132,55 @@ submit/status/export`、`validate_campaign/validate_answer` 及模块级
 `init_collection/claim_work/submit_answer/collection_status/export_dataset`），
 支持 `precommit_hook` 故障注入与 `observer` SQL 可观测读取证据。
 
+## 防泄漏训练/评测划分仓
+
+同一采集实体的图像以及旋转/镜像副本若被分入训练集与评测集，离线成绩会失真。
+需要带家族归族、不可逆用途承诺与提交重检的防泄漏划分时，使用仅依赖标准库与
+SQLite 的划分仓（设计、持久表示、索引与恢复代价见
+[划分仓契约](docs/split.md)）。它只接受独立样本清单，不读取更正台账、瓦片仓
+或复标库；既有入口全部保持兼容。
+
+```sh
+PYTHONPATH=src python -m raster_objects.split_cli init   --db run/split.db
+PYTHONPATH=src python -m raster_objects.split_cli ingest --db run/split.db --source run/batch.json
+PYTHONPATH=src python -m raster_objects.split_cli plan   --db run/split.db --source run/request.json
+PYTHONPATH=src python -m raster_objects.split_cli commit --db run/split.db --plan-id p1
+PYTHONPATH=src python -m raster_objects.split_cli export --db run/split.db --plan-id p1 --output run/dataset.json
+PYTHONPATH=src python -m raster_objects.split_cli status --db run/split.db
+```
+
+- `init` 只创建不存在的库；BATCH 严格为 `{samples}`，每项严格含
+  `sample_id,specimen_id,stratum,connectivity,grid`，标识符沿用 ident，栅格复用
+  `analyze` 完整校验。每批非空、批内 ID 不重复；全库最多 2000 样本、4 种
+  stratum、累计 100 万格，超限或一项非法则整批失败。同 ID 规范化同内容重复
+  无副作用，异内容拒绝；入仓后源文件删改不影响数据。
+- 归族维护两类可解释边及传递闭包：相同 `specimen_id` 的 `specimen` 边，与整幅
+  grid 经任意 90 度旋转/镜像后相同的 `duplicate` 边；比较含变换后尺寸，null 与
+  0 不同，connectivity/stratum 不影响副本关系。家族 ID 为最小成员 sample_id，
+  新样本可同时桥接多个旧家族。入仓时生成可复核 D4 规范键，后续归族与规划只走
+  持久标量/关系索引，不重新解码全库 grid，只有 export 读取所需样本负载。
+- `plan` 的 REQUEST 严格为 `{plan_id,sample_ids,quotas}`，配额键恰好覆盖当前
+  全部 stratum 且为非负整数（拒绝布尔）；请求先扩展为完整当前家族（≤20），
+  整族只能同属 train/eval/unused，已交付家族强制沿用旧用途。污染返回
+  `contaminated` 并附逐边标明 specimen/duplicate 的真实路径；精确配额无解返回
+  `infeasible`；多解取样本序下用途向量字典序最小（train<eval<unused）。记忆化
+  +后缀剪枝的精确搜索不穷举 `3^20`，方案带 `search` 证据；plan 只保存提案不
+  承诺，同规范化重试返回首方案，失败不占 plan_id。
+- `commit` 在当前状态重检原方案全部扩展家族的成员集合与用途兼容性：后桥接
+  改成员、家族污染或相反用途先占均返回 `stale_plan` 且零新增承诺，无关样本不
+  使方案失效。通过后 train/eval 承诺与回执单事务落库，重复 commit 返回原回执；
+  未 commit 不能 export。污染样本仍入仓成功，历史交付不可重写、可审计。
+- 协议错误退出 2、忙错误退出 4；`contaminated/infeasible/stale_plan` 为退出 0
+  的明确业务结果。8MB/严格 JSON/原子输出边界沿用仓库约定，输出不得覆盖库及
+  `-wal/-shm/-journal` 文件；`precommit_hook` 提供提交前故障注入，`observer`
+  提供读取证据。
+
+可测试的 Python API 位于 `raster_objects.split_store`
+（`SplitStore.initialize/ingest/plan/commit/export/status`、
+`validate_batch/canonical_form/solve_quotas` 及模块级
+`init_store/ingest_batch/plan_request/commit_plan/export_plan/store_status`）；
+`tests/split_oracle.py` 是与生产求解独立的穷举 oracle。
+
 
 ## 当前业务与样例
 # Binary raster objects v1
