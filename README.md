@@ -56,6 +56,43 @@ PYTHONPATH=src python -m raster_objects.ledger_cli export --db run/work.db --ver
 模块级 `init_ledger/apply_request/export_version`）与 `raster_objects.matching`
 （`match_objects`，带独立穷举 oracle 测试）。
 
+## 活动多源瓦片融合仓
+
+多个来源交付相互覆盖的瓦片时，使用仅依赖标准库与 SQLite 的融合仓（设计、持久表示、
+索引与资源代价见 [融合仓契约](docs/mosaic.md)）。它持久保存每个来源的逐格贡献，
+撤下高优先级来源后可准确恢复被遮蔽的低优先级观测；不保存更正版本、不分配跨查询
+对象身份，也不读取更正台账。
+
+```sh
+PYTHONPATH=src python -m raster_objects.mosaic_cli init     --db run/mosaic.db
+PYTHONPATH=src python -m raster_objects.mosaic_cli put      --db run/mosaic.db --source run/tile.json
+PYTHONPATH=src python -m raster_objects.mosaic_cli withdraw --db run/mosaic.db --tile-id a
+PYTHONPATH=src python -m raster_objects.mosaic_cli window   --db run/mosaic.db \
+  --row -4 --col -4 --height 2 --width 2 --connectivity 4 --output run/window.json
+```
+
+- `init` 只创建不存在的库；`put` 严格接受 `{tile_id,row,col,priority,grid}`，
+  tile_id 复用现有 ident 约束，row/col/priority 与全部全局格坐标均在
+  `[-10^9,10^9]` 内且拒绝布尔；grid 复用 0/1/null、矩形、边长 500、总格 100000
+  限制但无 connectivity 字段。8MB/重复键/原子输出等安全边界沿用仓库约定，窗口
+  输出不得覆盖数据库或其 `-wal/-shm` 辅助文件；非法请求退出 2。
+- 来源目录持久保存不可变规范化瓦片与活动状态：相同内容重复 put 无副作用（撤下后
+  也不复活），异内容同 ID 拒绝；撤下永久生效、重复撤下无副作用、未知 ID 报错。
+  `catalog_seq` 从 0 起，仅首次登记或首次撤下加 1，与目录、空间索引、逐格贡献在
+  单事务共同提交。每库上限 20000 来源、累计 500 万输入格，超限整次 put 失败。
+- 融合逐格区分 `uncovered/unknown/resolved/conflict`：null 是无意见，不压制任何
+  已知值；最高优先级同时有 0 和 1 即 conflict，不按 ID 或到达顺序裁决。每格给出
+  最高级贡献计数与按字符串序取最小 ID 的双向见证；窗口有 conflict 时 `result` 为
+  null，否则复用 analyze 的标签/对象/三类格数语义，标签仅窗口内编号，bbox 与
+  分数质心换全局坐标，周长按窗口裁切计算，且不受 128 目标上限约束。
+- 空间检索通过 500 跨桶 B 树索引定位候选，逐候选流式读取窗口内贡献，不扫描全目录、
+  不读取无关瓦片的 grid 负载；WAL 单快照事务保证窗口报告与目录状态、序号完全一致，
+  两进程交错读写只会得到撤下前或撤下后的完整状态。
+
+可测试的 Python API 位于 `raster_objects.mosaic`（`Mosaic.initialize/put/withdraw/
+window` 及模块级 `init_mosaic/put_tile/withdraw_tile/window_query`）；测试中的
+`tests/mosaic_oracle.py` 是与生产存储和几何实现无关的逐格 oracle。
+
 
 ## 当前业务与样例
 # Binary raster objects v1
